@@ -14,6 +14,7 @@ var DEFAULT_SETTINGS = {
     // Search settings
     method: "GET",
     queryParam: "q",
+    pageParam: "page",
     searchDelay: 300,
     minChars: 1,
     propertyToSearch: "name",
@@ -49,7 +50,8 @@ var DEFAULT_SETTINGS = {
     // Other settings
     idPrefix: "token-input-"
 };
-
+var noMoreResults = false;
+var currentPage = 1;
 // Default classes to use when theming
 var DEFAULT_CLASSES = {
     tokenList: "token-input-list",
@@ -192,10 +194,6 @@ $.TokenList = function (input, url_or_data, settings) {
                 show_dropdown_hint();
             }
         })
-        .blur(function () {
-            hide_dropdown();
-            $(this).val("");
-        })
         .bind("keyup keydown blur update", resize_input)
         .keydown(function (event) {
             var previous_token;
@@ -301,6 +299,7 @@ $.TokenList = function (input, url_or_data, settings) {
     var selected_dropdown_item = null;
 
     // The list to store the token items in
+	
     var token_list = $("<ul />")
         .addClass(settings.classes.tokenList)
         .click(function (event) {
@@ -329,8 +328,7 @@ $.TokenList = function (input, url_or_data, settings) {
                 li.removeClass(settings.classes.highlightedToken);
             }
         })
-        .insertBefore(hidden_input);
-
+        .insertBefore(hidden_input);		
     // The token holding the input box
     var input_token = $("<li />")
         .addClass(settings.classes.inputToken)
@@ -340,7 +338,13 @@ $.TokenList = function (input, url_or_data, settings) {
     // The list to store the dropdown items in
     var dropdown = $("<div>")
         .addClass(settings.classes.dropdown)
-        .appendTo("body")
+        .appendTo(token_list)
+		.scroll(function(e){
+			if((e.target.scrollHeight - $(this).scrollTop())<115){
+				var query = input_box.val();
+				run_additional_search(query);
+			}
+		})
         .hide();
 
     // Magic element to help us resize the text input
@@ -816,7 +820,82 @@ $.TokenList = function (input, url_or_data, settings) {
             }
         }
     }
+	function run_additional_search(query){		
+		if (noMoreResults){
+			return
+		}
+		currentPage++;
+		var cache_key = query + computeURL();
+		// Are we doing an ajax search or local data search?
+		if(settings.url) {
+			var url = computeURL();
+			// Extract exisiting get params
+			var ajax_params = {};
+			ajax_params.data = {};
+			if(url.indexOf("?") > -1) {
+				var parts = url.split("?");
+				ajax_params.url = parts[0];
 
+				var param_array = parts[1].split("&");
+				$.each(param_array, function (index, value) {
+					var kv = value.split("=");
+					ajax_params.data[kv[0]] = kv[1];
+				});
+			} else {
+				ajax_params.url = url;
+			}
+
+			// Prepare the request
+			ajax_params.data[settings.queryParam] = query;
+			ajax_params.data[settings.pageParam] = currentPage;
+			ajax_params.type = settings.method;
+			ajax_params.dataType = settings.contentType;
+			if(settings.crossDomain) {
+				ajax_params.dataType = "jsonp";
+			}
+
+			// Attach the success callback
+			ajax_params.success = function(results) {
+				if(results.length==0){
+					noMoreResults = true;
+					return;
+				}
+				
+			  if($.isFunction(settings.onResult)) {
+				  results = settings.onResult.call(hidden_input, results);
+			  }
+			  cache.add(cache_key, settings.jsonContainer ? results[settings.jsonContainer] : results);
+
+			  // only populate the dropdown if the results are associated with the active search query
+			  if(input_box.val().toLowerCase() === query) {
+				   results = settings.jsonContainer ? results[settings.jsonContainer] : results
+				   $.each(results, function(index, value) {
+						var dropdown_ul = dropdown.children("ul");
+						var this_li = settings.resultsFormatter(value);
+
+						this_li = find_value_and_highlight_term(this_li ,value[settings.propertyToSearch], query);
+
+						this_li = $(this_li).appendTo(dropdown_ul);
+
+						if(index % 2) {
+							this_li.addClass(settings.classes.dropdownItem);
+						} else {
+							this_li.addClass(settings.classes.dropdownItem2);
+						}
+
+						if(index === 0) {
+							select_dropdown_item(this_li);
+						}
+
+						$.data(this_li.get(0), "tokeninput", value);
+					});	
+			  }
+			};
+
+			// Make the request
+			$.ajax(ajax_params);
+		}        
+	}
     // compute the dynamic URL
     function computeURL() {
         var url = settings.url;
@@ -858,3 +937,26 @@ $.TokenList.Cache = function (options) {
     };
 };
 }(jQuery));
+
+
+//Autohide ugly hack
+$(document).ready(function(){
+	$("*").click(function(){		
+		var list = $(this).children(".token-input-list");
+		if(list.length==0){
+			list = $(this).parents(".token-input-list");
+		}			
+		if	(list.length>0){
+			$('.token-input-dropdown:visible').each(function(){
+				if (!list.children('.token-input-dropdown').is($(this))){
+					$(this).hide();
+				}
+			})
+			event.stopPropagation();
+			return;
+		}
+		else{
+			$('.token-input-dropdown').hide()
+		}
+	});
+})
